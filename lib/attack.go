@@ -2,6 +2,7 @@ package vegeta
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -20,6 +21,12 @@ type Attacker struct {
 	stopch    chan struct{}
 	workers   uint64
 	redirects int
+}
+
+// Common response for TS services
+type CommonResponse struct {
+	Message string `json:"message"`
+	Verdict string `json:"verdict"`
 }
 
 const (
@@ -248,18 +255,31 @@ func (a *Attacker) hit(tr Targeter, tm time.Time) *Result {
 	}
 	defer r.Body.Close()
 
-	in, err := io.Copy(ioutil.Discard, r.Body)
-	if err != nil {
-		return &res
-	}
-	res.BytesIn = uint64(in)
-
 	if req.ContentLength != -1 {
 		res.BytesOut = uint64(req.ContentLength)
 	}
 
 	if res.Code = uint16(r.StatusCode); res.Code < 200 || res.Code >= 400 {
-		res.Error = r.Status
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			res.Error = err.Error()
+			return &res
+		}
+		res.BytesIn = uint64(len(body))
+		response := CommonResponse{}
+		err = json.Unmarshal(body, &response)
+		if err != nil {
+			res.Error = r.Status
+		} else {
+			res.Error = fmt.Sprintf("%s: %s %s", r.Status, response.Message, response.Verdict)
+		}
+	} else {
+		in, err := io.Copy(ioutil.Discard, r.Body)
+		if err != nil {
+			res.Error = err.Error()
+			return &res
+		}
+		res.BytesIn = uint64(in)
 	}
 
 	return &res
